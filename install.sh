@@ -1,21 +1,24 @@
 #!/bin/sh
 # Installs or removes the patched amdgpu module (userptr fast path) on the kernel it was built for.
 #
-#   sudo ./install.sh install [amdgpu.ko.gz]   download the release module (or use the given file), check it, install
-#   sudo ./install.sh uninstall                put the original module back
-#   ./install.sh status                        which module is on disk and which one is loaded
+#   sudo ./install.sh install                 download the published module (kernel 7.3.3-tkg-eevdf-llvm only), install
+#   sudo ./install.sh install amdgpu.ko.xx    install a module you built for the running kernel (build-module.sh)
+#   sudo ./install.sh uninstall               put the original module back
+#   ./install.sh status                       which module is on disk and which one is loaded
 #
 # The patched module WEAKENS A SECURITY CHECK in the amdgpu driver (NAKed upstream): read README.md first.
 # A reboot is needed after install and uninstall. Works without cloning:
 #   curl -LO https://raw.githubusercontent.com/deadlynch/phenom-kernel-patches/main/install.sh && sudo sh install.sh install
 set -eu
 
-KERNEL=7.3.3-tkg-eevdf-llvm
-URL=https://github.com/deadlynch/phenom-kernel-patches/releases/download/amdgpu-$KERNEL/amdgpu.ko.gz
+PUBLISHED=7.3.3-tkg-eevdf-llvm  # the kernel of the published module
+URL=https://github.com/deadlynch/phenom-kernel-patches/releases/download/amdgpu-$PUBLISHED/amdgpu.ko.gz
 SHA256=1ec9fd7664ded684a0c815e90a54a662cc82d617c34acba2b48bd7030892b6c2
+KERNEL=$(uname -r)
 DIR=/lib/modules/$KERNEL/kernel/drivers/gpu/drm/amd/amdgpu
-MOD=$DIR/amdgpu.ko.gz
-ORIG=$DIR/amdgpu.ko.gz.orig
+MOD=$(ls "$DIR"/amdgpu.ko "$DIR"/amdgpu.ko.gz "$DIR"/amdgpu.ko.xz "$DIR"/amdgpu.ko.zst 2>/dev/null | head -1 || true)
+EXT=${MOD##*/amdgpu.ko}    # "", .gz, .xz or .zst: what this kernel's modules use
+ORIG=$MOD.orig
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 need_root() { [ "$(id -u)" = 0 ] || die "run it with sudo"; }
@@ -30,15 +33,15 @@ initramfs() {  # rebuild the running kernel's initramfs with whichever tool the 
 }
 
 status() {
-    echo "running kernel: $(uname -r) (module built for $KERNEL)"
-    if [ -e "$MOD" ]; then
+    echo "running kernel: $KERNEL"
+    if [ -n "$MOD" ] && [ -e "$MOD" ]; then
         s=$(sha "$MOD")
         if [ "$s" = "$SHA256" ]; then echo "on disk: patched module"
         elif [ -e "$ORIG" ] && [ "$s" = "$(sha "$ORIG")" ]; then echo "on disk: original module (backup kept as amdgpu.ko.gz.orig)"
         else echo "on disk: original or another module (sha256 $s)"
         fi
     else
-        echo "on disk: no $MOD"
+        echo "on disk: no amdgpu module in $DIR"
     fi
     if [ -r /sys/module/amdgpu/taint ]; then
         case $(cat /sys/module/amdgpu/taint) in
@@ -52,9 +55,9 @@ status() {
 
 install_mod() {
     need_root
-    [ "$(uname -r)" = "$KERNEL" ] ||
-        die "this module is for kernel $KERNEL only; this is $(uname -r). Build it from source (README.md)."
-    [ -e "$MOD" ] || die "no $MOD: is this the right kernel?"
+    [ -n "$MOD" ] || die "no amdgpu module in $DIR"
+    [ $# -ge 1 ] || [ "$KERNEL" = "$PUBLISHED" ] ||
+        die "the published module is for kernel $PUBLISHED only; this is $KERNEL. Build one for it (README.md)."
     cat <<'EOF'
 
   WARNING: this module weakens a security check in the amdgpu driver. The amdgpu maintainer
@@ -69,19 +72,23 @@ EOF
     [ "$answer" = yes ] || die "not installed"
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
-    if [ $# -ge 1 ]; then cp "$1" "$tmp/amdgpu.ko.gz"
+    new=$tmp/amdgpu.ko$EXT
+    if [ $# -ge 1 ]; then
+        case $1 in *"amdgpu.ko$EXT") ;; *) die "this kernel's modules are amdgpu.ko$EXT: give a module compressed the same way";; esac
+        cp "$1" "$new"
     else
         echo "downloading $URL"
-        curl -fL --proto '=https' -o "$tmp/amdgpu.ko.gz" "$URL" || die "download failed"
+        curl -fL --proto '=https' -o "$new" "$URL" || die "download failed"
+        [ "$(sha "$new")" = "$SHA256" ] || die "sha256 mismatch: not the published module, nothing changed"
     fi
-    [ "$(sha "$tmp/amdgpu.ko.gz")" = "$SHA256" ] || die "sha256 mismatch: not the published module, nothing changed"
-    [ "$(modinfo -F vermagic "$tmp/amdgpu.ko.gz" | cut -d' ' -f1)" = "$KERNEL" ] || die "module is not for $KERNEL"
+    [ "$(modinfo -F vermagic "$new" | cut -d' ' -f1)" = "$KERNEL" ] || die "the module is not for kernel $KERNEL"
     if [ ! -e "$ORIG" ]; then
-        [ "$(sha "$MOD")" != "$SHA256" ] || die "the installed module is already the patched one and there is no backup"
+        [ "$(modinfo -F vermagic "$MOD" >/dev/null && sha "$MOD")" != "$(sha "$new")" ] ||
+            die "the installed module is already this one and there is no backup of the original"
         cp -a "$MOD" "$ORIG"
         echo "original kept as $ORIG"
     fi
-    install -m 644 -o root -g root "$tmp/amdgpu.ko.gz" "$MOD"
+    install -m 644 -o root -g root "$new" "$MOD"
     depmod "$KERNEL"
     initramfs
     echo "installed: reboot to load it (sudo reboot)"

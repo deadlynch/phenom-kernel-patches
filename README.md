@@ -74,13 +74,36 @@ with that config.
     # on the build machine, after applying the patch in the tree (git apply patches/*.patch)
     scripts/build-amdgpu-module.sh ~/kbuild/linux-tkg/linux-src-git out
     # copy out/amdgpu.ko.gz to the Phenom, then there
-    sudo sh install.sh install amdgpu.ko.gz && sudo reboot
+    sudo sh install.sh install amdgpu.ko.gz && sudo reboot   # (any module for the running kernel, same compression)
 
 The module built this way is marked out-of-tree (`amdgpu: loading out-of-tree module taints kernel` at boot): that is
 expected.
 
 **Revert** (on the Phenom): `sudo sh install.sh uninstall && sudo reboot`, which restores the `amdgpu.ko.gz.orig`
 kept at the first install.
+
+## On another machine
+
+The prebuilt module only fits the Phenom's kernel. Elsewhere the patch has to be built into **your** kernel, from its
+source and with its config: a module built from another tree can load and still crash, because core kernel structures
+differ between builds. The caveats above apply the same.
+
+1. **Rebuild your kernel with the patch** (the reliable way). Most kernel builders take extra patches:
+   - linux-tkg: put it in `linux<VERSION><PATCHLEVEL>-tkg-userpatches/` as `amdgpu-userptr-skip-unchanged.mypatch`
+     (`_user_patches="true"` in `customization.cfg`).
+   - Arch-style PKGBUILD (`linux`, CachyOS kernels): add it to `source=()` and apply it in `prepare()`.
+   - Gentoo: `/etc/portage/patches/sys-kernel/gentoo-sources/`.
+   - A plain kernel.org tree: `git apply` or `patch -p1` in it, then build as usual.
+
+   It applies to 7.3 and should to newer kernels while `amdgpu_cs_parser_bos()` keeps its current shape (unchanged up
+   to 7.3 and amd-staging-drm-next as of 2026-11-08).
+2. **Only the module, from your own kernel's build tree:** after a kernel build you still have (the tree you installed
+   it from, with its `.config`, `Module.symvers` and signing key), apply the patch there and run
+   `scripts/build-amdgpu-module.sh <tree> out`, then `sudo sh install.sh install out/amdgpu.ko.gz`. It must be the
+   exact tree of the running kernel: `install.sh` checks the version, not the build.
+3. **Distribution kernels you don't build** (Ubuntu, Fedora, stock Arch): use route 1 with the distribution's kernel
+   package source. With Secure Boot or `module.sig_enforce`, a module you build must be signed with a key the kernel
+   trusts, or it won't load.
 
 ## License
 
