@@ -3,11 +3,23 @@
 Local kernel patches for my Phenom II X6 1100T + RX 580 gaming PC (Void Linux, linux-tkg kernels built on another
 machine). Kept here so they survive kernel rebuilds.
 
-> [!WARNING]
-> **`amdgpu-userptr-skip-unchanged.patch` is a deliberate local trade-off, not a fix to share.** The same idea was
-> posted to amd-gfx on 2026-03-31 ("drm/amdgpu: add fast-path for userptr BO validation") and the amdgpu maintainer
-> rejected it: *"we have intentionally removed that before because it leads to security issues"*. Use it only on a
-> machine where that risk is acceptable (a single-user gaming PC). Don't send it upstream, don't recommend it.
+> [!CAUTION]
+> **Read this before using anything here.**
+>
+> - **`amdgpu-userptr-skip-unchanged.patch` weakens a security check in the amdgpu driver.** The same idea was posted
+>   to amd-gfx on 2026-03-31 ([drm/amdgpu: add fast-path for userptr BO validation](https://ratatoskr.run/amd-gfx/2026/03/16014637/t))
+>   and the amdgpu maintainer rejected it at once: *"Well absolutely clear NAK on that, we have intentionally removed
+>   that before because it leads to security issues."* The exact issue isn't documented there; the check it skips is
+>   what makes sure the GPU only touches memory pages that still belong to the program that submitted the work.
+> - **Assume a local program could abuse it** to make the GPU read or write memory it shouldn't (memory disclosure or
+>   corruption). Anything that submits GPU work counts, including a web browser's GPU process.
+> - **Only for a single-user machine used for games**, where that risk is accepted on purpose. Not for a PC with
+>   personal, work or financial data, not for shared or multi-user systems, not for servers.
+> - **Not upstream, not supported, no warranty.** It will not be sent to the kernel; don't report bugs from a kernel
+>   with it to amdgpu or your distribution. The numbers below come from one machine and one game.
+> - **Kernel modules can stop your system from booting.** Keep a known-good kernel in the boot menu and know how to
+>   revert (below) before installing.
+> - Written with an AI assistant (Claude Code); the human who installs it is responsible for it.
 
 ## amdgpu-userptr-skip-unchanged.patch
 
