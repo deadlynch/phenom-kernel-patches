@@ -83,8 +83,14 @@ Things to know:
   Boot / lockdown / `module.sig_enforce` the kernel loads it and marks itself tainted; with them the script refuses
   to install it (sign it with a Machine Owner Key yourself, or don't use it).
 - Built-in amdgpu (`CONFIG_DRM_AMDGPU=y`) can't be replaced this way: rebuild the kernel with the patch.
-- Tested so far: the build on CachyOS 7.3.1 (clang, zstd modules). Install and uninstall are being tested on Void with
-  a linux-tkg 7.3.3 kernel.
+- **Compiler:** a module must be built with the compiler family and major version that built the kernel. The script
+  checks it (`CONFIG_CLANG_VERSION` / `CONFIG_GCC_VERSION`) and says which one to install; with clang it takes
+  `clang-N`, `ld.lld-N`... when the plain `clang` is another version. A kernel built on another machine with a newer
+  compiler than this one has can't get its module built here.
+- **Tested:** `build` on CachyOS 7.3.1 (clang 23, zstd modules): same dependencies as the stock module, no missing
+  symbols. `install` and `uninstall` haven't been run on a real system yet; the module they install is the one `build`
+  makes. On the Phenom the patch was installed by hand (the module replaced in place); the script puts back such a
+  module's original (`*.orig`) before installing or on uninstall.
 
 ## Patching your own kernel build
 

@@ -16,7 +16,7 @@
 # sha256sums.asc), the patch applied, compiled as an external module against the running kernel's own headers
 # (/lib/modules/<kernel>/build) with the same compiler family, stripped, signed when the headers carry the kernel's
 # signing key, compressed like the kernel's other modules. Needs: the kernel headers package, make, patch, curl, xz,
-# and gcc or clang + lld as the kernel was built with.
+# and the compiler the kernel was built with, same major version (gcc N, or clang N + lld N).
 set -eu
 
 NAME=amdgpu-userptr-fastpath
@@ -107,12 +107,26 @@ check_kernel() {
     S=$(sed -n 's/^SUBLEVEL = //p' "$BUILD/Makefile")
     [ -n "$V" ] && [ -n "$P" ] || die "can't read the kernel version from $BUILD/Makefile"
     BASE=$V.$P; [ "${S:-0}" = 0 ] || BASE=$V.$P.$S
+    # A module has to be built with the compiler family and major version the kernel was built with: the kernel's
+    # flags follow that compiler (a newer clang's flags stop an older one, -fms-anonymous-structs for one).
     if [ -n "$(conf CONFIG_CC_IS_CLANG)" ]; then
-        MAKEVARS="LLVM=1"
-        for t in clang ld.lld; do command -v $t >/dev/null || die "the kernel was built with clang: install clang and lld"; done
-    else
+        want=$(( $(conf CONFIG_CLANG_VERSION) / 10000 ))
         MAKEVARS=""
-        command -v gcc >/dev/null || die "the kernel was built with gcc: install gcc"
+        # LLVM=1 uses the plain clang, ld.lld, llvm-ar...; LLVM=-N their -N names, which must all be there
+        for sfx in "" "-$want"; do
+            ok=yes
+            for t in clang ld.lld llvm-ar llvm-nm llvm-objcopy llvm-strip; do command -v "$t$sfx" >/dev/null || ok=no; done
+            [ "$ok" = yes ] && [ "$("clang$sfx" -dumpversion | cut -d. -f1)" = "$want" ] || continue
+            MAKEVARS="LLVM=${sfx:-1}"; break
+        done
+        [ -n "$MAKEVARS" ] || die "this kernel was built with clang $want; install clang $want and lld $want (this
+  system has $(clang -dumpversion 2>/dev/null || echo no clang)). A module built with another clang fails or misbehaves."
+    else
+        want=$(( $(conf CONFIG_GCC_VERSION) / 10000 ))
+        MAKEVARS=""
+        command -v gcc >/dev/null || die "this kernel was built with gcc $want: install gcc $want"
+        [ "$(gcc -dumpversion | cut -d. -f1)" = "$want" ] ||
+            die "this kernel was built with gcc $want; this system has gcc $(gcc -dumpversion): install gcc $want"
     fi
     for t in make patch curl xz; do command -v $t >/dev/null || die "install $t"; done
     EXT=""
@@ -132,7 +146,7 @@ can_load_unsigned() {  # 0 when an unsigned module would load
 build() {  # $1: output dir; leaves $1/amdgpu.ko$EXT
     out=$1
     check_kernel
-    say "kernel $KERNEL (kernel.org $BASE, ${MAKEVARS:-gcc}), modules ${EXT:-uncompressed}"
+    say "kernel $KERNEL (kernel.org $BASE, ${MAKEVARS:+clang }${MAKEVARS:-gcc}), modules ${EXT:-uncompressed}"
     mkdir -p "$CACHE" "$out"
     tarball=linux-$BASE.tar.xz
     url=https://cdn.kernel.org/pub/linux/kernel/v$V.x
@@ -157,7 +171,8 @@ build() {  # $1: output dir; leaves $1/amdgpu.ko$EXT
     # (-I: the tracepoint headers include ../../drivers/gpu/drm/amd/... from the kernel tree; this resolves it here)
     # shellcheck disable=SC2086
     make -C "$BUILD" $MAKEVARS M="$src/drivers/gpu/drm/amd/amdgpu" KCFLAGS="-I$src/drivers/gpu" -j"$(nproc)" modules \
-        > "$out/build.log" 2>&1 || { tail -20 "$out/build.log"; die "build failed: see $out/build.log"; }
+        > "$out/build.log" 2>&1 || { tail -20 "$out/build.log"; cp "$out/build.log" "$CACHE/build.log";
+                                      die "build failed: the whole log is $CACHE/build.log"; }
     if grep -q "undefined!" "$out/build.log"; then grep "undefined!" "$out/build.log" | head; die "missing kernel symbols"; fi
     ko=$out/amdgpu.ko
     cp "$src/drivers/gpu/drm/amd/amdgpu/amdgpu.ko" "$ko"
