@@ -1,0 +1,57 @@
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c
+index ef8a61ce4..acb74a839 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c
+@@ -909,6 +909,21 @@ static int amdgpu_cs_parser_bos(struct amdgpu_cs_parser *p,
+ 			goto out_free_user_pages;
+ 		}
+ 
++		/* The pages the last submission used are still the backing
++		 * pages when the MMU notifier has seen no invalidation since:
++		 * skip faulting in and comparing every page again (a large
++		 * imported host allocation costs a walk of all its pages per
++		 * submission otherwise). amdgpu_cs_submit() checks the sequence
++		 * again under the notifier lock, as for a fresh range.
++		 */
++		if (bo->userptr_seq_set &&
++		    !mmu_interval_read_retry(&bo->notifier, bo->userptr_seq)) {
++			e->range->hmm_range.notifier = &bo->notifier;
++			e->range->hmm_range.notifier_seq = bo->userptr_seq;
++			e->user_invalidated = false;
++			continue;
++		}
++
+ 		r = amdgpu_ttm_tt_get_user_pages(bo, e->range);
+ 		if (r)
+ 			goto out_free_user_pages;
+@@ -1325,7 +1340,13 @@ static int amdgpu_cs_submit(struct amdgpu_cs_parser *p,
+ 	 */
+ 	r = 0;
+ 	amdgpu_bo_list_for_each_userptr_entry(e, p->bo_list) {
+-		r |= !amdgpu_hmm_range_valid(e->range);
++		bool valid = amdgpu_hmm_range_valid(e->range);
++
++		r |= !valid;
++		/* the BO's pages are those of this range's sequence now */
++		e->bo->userptr_seq_set = valid;
++		if (valid)
++			e->bo->userptr_seq = e->range->hmm_range.notifier_seq;
+ 		amdgpu_hmm_range_free(e->range);
+ 		e->range = NULL;
+ 	}
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_object.h b/drivers/gpu/drm/amd/amdgpu/amdgpu_object.h
+index ff11a0903..d655dbda8 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_object.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_object.h
+@@ -116,6 +116,11 @@ struct amdgpu_bo {
+ 
+ #ifdef CONFIG_MMU_NOTIFIER
+ 	struct mmu_interval_notifier	notifier;
++	/* userptr: notifier sequence of the pages the last submission used
++	 * (amdgpu_cs.c); valid while userptr_seq_set and no invalidation since
++	 */
++	unsigned long			userptr_seq;
++	bool				userptr_seq_set;
+ #endif
+ 	struct kgd_mem                  *kfd_bo;
+ 
