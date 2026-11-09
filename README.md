@@ -47,63 +47,52 @@ TotK Recomp and Savage Wind Recomp import host memory too, so they may gain as w
 Written for 7.3.3 (`drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c`, `amdgpu_object.h`); unchanged upstream as of 2026-11-08
 (amd-staging-drm-next and mainline), so it should apply to the next kernels too.
 
-## Use
+## Install or remove
 
-**With a new linux-tkg build:** the patch is also in `~/kbuild/linux-tkg/linux73-tkg-userpatches/` as `.mypatch`
-(`_user_patches="true"` in `customization.cfg`), so it goes into every 7.3 build. For another version, copy it to
-`linux<VERSION><PATCHLEVEL>-tkg-userpatches/`.
+`amdgpu-userptr-fastpath.sh` does it for the **running kernel**, on any distribution where amdgpu is a module:
 
-**Prebuilt module** (the one installed on the Phenom): `install.sh` downloads it from the
-[amdgpu-7.3.3-tkg-eevdf-llvm release](https://github.com/deadlynch/phenom-kernel-patches/releases/tag/amdgpu-7.3.3-tkg-eevdf-llvm),
-checks its sha256 and kernel version, keeps the original module once as `amdgpu.ko.gz.orig`, installs it and rebuilds
-the initramfs. It loads **only** on the kernel it was built for: `7.3.3-tkg-eevdf-llvm`, linux-tkg with
-`configs/7.3.3-tkg-eevdf-llvm.config` (AMD K10 tuning, Clang ThinLTO), signed with that build's own key; the script
-refuses any other kernel.
-
-    curl -LO https://raw.githubusercontent.com/deadlynch/phenom-kernel-patches/main/install.sh
-    sudo sh install.sh install      # asks you to type "yes" after the warning
+    curl -LO https://raw.githubusercontent.com/deadlynch/phenom-kernel-patches/main/amdgpu-userptr-fastpath.sh
+    sudo sh amdgpu-userptr-fastpath.sh install      # shows the warning, asks you to type "yes", builds and installs
     sudo reboot
-    sh install.sh status            # which module is on disk and which one is loaded
-    sudo sh install.sh uninstall && sudo reboot    # the original module back
+    sh amdgpu-userptr-fastpath.sh status            # what is installed and which amdgpu is loaded
+    sudo sh amdgpu-userptr-fastpath.sh uninstall && sudo reboot   # back to your distribution's amdgpu
 
-Its source is the kernel 7.3.3 tree as linux-tkg prepares it, plus `patches/amdgpu-userptr-skip-unchanged.patch`, built
-with that config.
+What `install` does:
 
-**Only the module, on an already built tree** (2-3 minutes instead of a whole kernel):
+1. Checks that your kernel's headers are installed (`/lib/modules/<kernel>/build`: the `linux-headers`,
+   `linux-cachyos-headers`, `kernel-devel` or `linux-headers-<kernel>` package of **that exact kernel**) and that
+   amdgpu is a module there.
+2. Downloads that kernel version's source from kernel.org (checked against kernel.org's `sha256sums.asc`) and unpacks
+   only `drivers/gpu/drm/amd`.
+3. Applies the patch (it is inside the script) and stops if it doesn't apply cleanly.
+4. Builds only amdgpu, as an external module against **your** kernel's headers, with the compiler your kernel was
+   built with (gcc, or clang + lld): the way DKMS modules are built. That matches your kernel's own structures.
+5. Strips it, signs it when your headers carry the kernel's signing key, compresses it like your other modules.
+6. Installs it as `/lib/modules/<kernel>/updates/amdgpu-userptr-fastpath/amdgpu.ko*`, beside the distribution's
+   module, which stays untouched: `depmod` prefers `updates/`. Then rebuilds the initramfs (dracut, mkinitcpio,
+   update-initramfs or booster).
 
-    # on the build machine, after applying the patch in the tree (git apply patches/*.patch)
-    scripts/build-amdgpu-module.sh ~/kbuild/linux-tkg/linux-src-git out
-    # copy out/amdgpu.ko.gz to the Phenom, then there
-    sudo sh install.sh install amdgpu.ko.gz && sudo reboot   # (any module for the running kernel, same compression)
+`uninstall` deletes that folder, runs `depmod` and rebuilds the initramfs. `build` only builds it into
+`./amdgpu-userptr-fastpath-<kernel>/`, without root and without installing.
 
-The module built this way is marked out-of-tree (`amdgpu: loading out-of-tree module taints kernel` at boot): that is
-expected.
+Things to know:
 
-**Revert** (on the Phenom): `sudo sh install.sh uninstall && sudo reboot`, which restores the `amdgpu.ko.gz.orig`
-kept at the first install.
+- **Kernel updates:** the new kernel comes with the stock amdgpu. Run `install` again after booting it.
+- **Distribution changes to amdgpu are lost:** the module is built from kernel.org's source of the same version.
+- **Signing:** distribution headers don't carry the kernel's signing key, so the module isn't signed. Without Secure
+  Boot / lockdown / `module.sig_enforce` the kernel loads it and marks itself tainted; with them the script refuses
+  to install it (sign it with a Machine Owner Key yourself, or don't use it).
+- Built-in amdgpu (`CONFIG_DRM_AMDGPU=y`) can't be replaced this way: rebuild the kernel with the patch.
+- Tested so far: the build on CachyOS 7.3.1 (clang, zstd modules). Install and uninstall are being tested on Void with
+  a linux-tkg 7.3.3 kernel.
 
-## On another machine
+## Patching your own kernel build
 
-The prebuilt module only fits the Phenom's kernel. Elsewhere the patch has to be built into **your** kernel, from its
-source and with its config: a module built from another tree can load and still crash, because core kernel structures
-differ between builds. The caveats above apply the same.
-
-1. **Rebuild your kernel with the patch** (the reliable way). Most kernel builders take extra patches:
-   - linux-tkg: put it in `linux<VERSION><PATCHLEVEL>-tkg-userpatches/` as `amdgpu-userptr-skip-unchanged.mypatch`
-     (`_user_patches="true"` in `customization.cfg`).
-   - Arch-style PKGBUILD (`linux`, CachyOS kernels): add it to `source=()` and apply it in `prepare()`.
-   - Gentoo: `/etc/portage/patches/sys-kernel/gentoo-sources/`.
-   - A plain kernel.org tree: `git apply` or `patch -p1` in it, then build as usual.
-
-   It applies to 7.3 and should to newer kernels while `amdgpu_cs_parser_bos()` keeps its current shape (unchanged up
-   to 7.3 and amd-staging-drm-next as of 2026-11-08).
-2. **Only the module, from your own kernel's build tree:** after a kernel build you still have (the tree you installed
-   it from, with its `.config`, `Module.symvers` and signing key), apply the patch there and run
-   `scripts/build-amdgpu-module.sh <tree> out`, then `sudo sh install.sh install out/amdgpu.ko.gz`. It must be the
-   exact tree of the running kernel: `install.sh` checks the version, not the build.
-3. **Distribution kernels you don't build** (Ubuntu, Fedora, stock Arch): use route 1 with the distribution's kernel
-   package source. With Secure Boot or `module.sig_enforce`, a module you build must be signed with a key the kernel
-   trusts, or it won't load.
+The patch is also in `patches/` for kernel builders: linux-tkg (`linux<VERSION><PATCHLEVEL>-tkg-userpatches/` as a
+`.mypatch`, with `_user_patches="true"`), an Arch-style PKGBUILD (`source=()` and `prepare()`), Gentoo
+(`/etc/portage/patches/sys-kernel/gentoo-sources/`), or `patch -p1` in a plain tree. It applies to 7.3 and should to
+newer kernels while `amdgpu_cs_parser_bos()` keeps its shape (unchanged up to 7.3 and amd-staging-drm-next as of
+2026-11-08).
 
 ## License
 
