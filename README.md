@@ -53,15 +53,18 @@ Written for 7.3.3 (`drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c`, `amdgpu_object.h`);
 (`_user_patches="true"` in `customization.cfg`), so it goes into every 7.3 build. For another version, copy it to
 `linux<VERSION><PATCHLEVEL>-tkg-userpatches/`.
 
-**Prebuilt module** (the one installed on the Phenom): the
-[amdgpu-7.3.3-tkg-eevdf-llvm release](https://github.com/deadlynch/phenom-kernel-patches/releases/tag/amdgpu-7.3.3-tkg-eevdf-llvm)
-has `amdgpu.ko.gz`. It loads **only** on the kernel it was built for: `7.3.3-tkg-eevdf-llvm`, linux-tkg with
-`configs/7.3.3-tkg-eevdf-llvm.config` (AMD K10 tuning, Clang ThinLTO), signed with that build's own key. Any other
-kernel needs the module built from source as below. On the Phenom:
+**Prebuilt module** (the one installed on the Phenom): `install.sh` downloads it from the
+[amdgpu-7.3.3-tkg-eevdf-llvm release](https://github.com/deadlynch/phenom-kernel-patches/releases/tag/amdgpu-7.3.3-tkg-eevdf-llvm),
+checks its sha256 and kernel version, keeps the original module once as `amdgpu.ko.gz.orig`, installs it and rebuilds
+the initramfs. It loads **only** on the kernel it was built for: `7.3.3-tkg-eevdf-llvm`, linux-tkg with
+`configs/7.3.3-tkg-eevdf-llvm.config` (AMD K10 tuning, Clang ThinLTO), signed with that build's own key; the script
+refuses any other kernel.
 
-    curl -LO https://github.com/deadlynch/phenom-kernel-patches/releases/download/amdgpu-7.3.3-tkg-eevdf-llvm/amdgpu.ko.gz
-    sha256sum amdgpu.ko.gz   # 1ec9fd7664ded684a0c815e90a54a662cc82d617c34acba2b48bd7030892b6c2
-    sudo scripts/install-module.sh amdgpu.ko.gz && sudo reboot
+    curl -LO https://raw.githubusercontent.com/deadlynch/phenom-kernel-patches/main/install.sh
+    sudo sh install.sh install      # asks you to type "yes" after the warning
+    sudo reboot
+    sh install.sh status            # which module is on disk and which one is loaded
+    sudo sh install.sh uninstall && sudo reboot    # the original module back
 
 Its source is the kernel 7.3.3 tree as linux-tkg prepares it, plus `patches/amdgpu-userptr-skip-unchanged.patch`, built
 with that config.
@@ -71,13 +74,13 @@ with that config.
     # on the build machine, after applying the patch in the tree (git apply patches/*.patch)
     scripts/build-amdgpu-module.sh ~/kbuild/linux-tkg/linux-src-git out
     # copy out/amdgpu.ko.gz to the Phenom, then there
-    sudo scripts/install-module.sh amdgpu.ko.gz && sudo reboot
+    sudo sh install.sh install amdgpu.ko.gz && sudo reboot
 
 The module built this way is marked out-of-tree (`amdgpu: loading out-of-tree module taints kernel` at boot): that is
 expected.
 
-**Revert** (on the Phenom): `sudo scripts/install-module.sh --revert && sudo reboot`, which restores the
-`amdgpu.ko.gz.orig` kept at the first install.
+**Revert** (on the Phenom): `sudo sh install.sh uninstall && sudo reboot`, which restores the `amdgpu.ko.gz.orig`
+kept at the first install.
 
 ## License
 
